@@ -1,49 +1,51 @@
-use std::env;
-use std::path;
-use input::Input;
-use entrystore::{EntryStore, Entry, EntryKeyValue};
+use entrystore::{AuthInfo, Entry, EntryStore};
+use entrystore::EntrySelector;
+use rawio::RawStore;
+use entrystore::Cipher;
+use errors::*;
 
-pub struct Command<T: Input> {
-    home: path::PathBuf,
+pub struct Command<T: EntrySelector, RW: RawStore, CP: Cipher> {
+    entry_store: EntryStore<RW, CP>,
     input: T,
 }
 
-impl<T: Input> Command<T> {
-    pub fn new(input: T) -> Command<T> {
-        let home = match env::home_dir() {
-            Some(p) => p,
-            None => panic!("Impossible to get home dir"),
-        };
-
+impl<T, RW, CP> Command<T, RW, CP>
+where
+    T: EntrySelector,
+    RW: RawStore,
+    CP: Cipher,
+{
+    pub fn new(input: T, entry_store: EntryStore<RW, CP>) -> Command<T, RW, CP> {
         Command {
-            home: home,
+            entry_store: entry_store,
             input: input,
         }
     }
 
-    pub fn add_entry(&self, title: &str) {
-        let mut store = EntryStore::load(&self.home, &self.input);
-        let default = Entry::new(title, "", "");
-        let kv = self.input.get_entry_info(title, default);
-        store.add(kv.title.as_str(), kv.entry);
-        store.save();
+    pub fn add_entry(&mut self, title: &str) -> Result<()> {
+        let default = Entry::new(title, AuthInfo::blank());
+        let entry = self.input.get_entry_info(&default)?;
+        self.entry_store.add(entry)?;
+        self.entry_store.save()?;
+        Ok(())
     }
 
-    pub fn show_entry(&self, title: &str) -> Option<EntryKeyValue> {
-        let store = EntryStore::load(&self.home, &self.input);
-        store.select_one(title, &self.input)
+    pub fn get_entry(&mut self, title: &str) -> Result<Option<Entry>> {
+        self.entry_store.select_one(title, &self.input)
     }
 
-    pub fn change_entry(&self, title: &str) {
-        let mut store = EntryStore::load(&self.home, &self.input);
-        match store.select_one(title, &self.input) {
-            Some(default_kv) => {
-                let new_entry = self.input
-                                    .get_entry_info(default_kv.title.as_str(), default_kv.entry);
-                store.change(new_entry.title.as_str(), new_entry.entry);
-                store.save();
+    pub fn change_entry(&mut self, title: &str) -> Result<()> {
+        match self.entry_store.select_one(title, &self.input)? {
+            Some(default) => {
+                let new_entry = self.input.get_entry_info(&default)?;
+                self.entry_store.change(&default.title.as_str(), new_entry)?;
+                self.entry_store.save()?;
+                Ok(())
             }
-            None => println!("No entry."),
+            None => {
+                println!("No entry.");
+                Ok(())
+            }
         }
     }
 }
